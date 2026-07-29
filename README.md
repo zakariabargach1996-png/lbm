@@ -1,177 +1,195 @@
-# LBM Simple Solver: two-dimensional lattice Boltzmann simulations
+# LBM Simple Solver
 
-The executable supports five D2Q9/BGK cases: shear-wave decay, density-wave
-propagation, Couette flow, force-driven Poiseuille flow, and a moving-lid
-cavity. The command-line syntax is
+This repository contains a coarray Fortran D2Q9 solver for five cases:
+`shear`, `density`, `couette`, `poiseuille`, and `lid`.
 
-```text
-milestone4 CASE [OMEGA] [WALL_VELOCITY] [MAX_STEPS]
+## Requirements
+
+For local runs, install:
+
+- Bash, `awk`, and a Fortran compiler;
+- GNU Fortran for one-image runs, Intel `ifx` for shared-memory multi-image
+  runs, or OpenCoarrays (`caf` and `cafrun`) for portable multi-image runs;
+- Fortran Package Manager (`fpm`) only if you prefer to use the project
+  manifest directly;
+- Python 3 with NumPy and Matplotlib only if plots or output validation are
+  required.
+
+If Intel oneAPI is installed but `ifx` is not yet in `PATH`, initialize it
+before running a script:
+
+```bash
+source /opt/intel/oneapi/setvars.sh
 ```
 
-The implementation is separated into `lbm_params` (lattice constants),
-`domain_decomposition` (process grid and halo exchange), `lbm_solver`
-(initialization, collision, streaming, and boundaries), and `lbm_output`
-(diagnostics and field/profile output). The main program contains the run
-configuration and timestep orchestration.
+## Test the code
 
-`OMEGA` defaults to `1/0.7`, and the program rejects values outside
-`0 < omega < 2`. The lattice viscosity is
+Run the Fortran unit tests:
 
-```text
-nu = (1/3) * (1/omega - 1/2).
+```bash
+bash test.sh
 ```
 
-For the lid cavity, the Reynolds number is printed at startup and is computed
-as `Re = WALL_VELOCITY * NX / nu`. Compile that case on a 300 x 300 grid to
-match the assignment.
+Run the unit tests followed by a 20-step smoke test of all five cases:
 
-The optional `MAX_STEPS` argument is intended for reproducible performance
-runs: it forces exactly that many steps and disables early convergence and
-in-loop diagnostic/output work, so the measurement covers the LBM kernels and
-halo communication rather than file I/O. Every
-run reports synchronized wall-clock time and MLUPS and appends one row to
-`performance.csv`. MLUPS uses exactly `NX * NY * completed_steps`; ghost cells
-are not counted.
+```bash
+SMOKE=1 bash test.sh
+```
 
-Set `LBM_STEP_LIMIT` to cap a physical run while retaining residual checks,
-diagnostic output, and early convergence. This is separate from positional
-`MAX_STEPS`, which remains the fixed-step performance mode.
+GNU Fortran is selected automatically when Intel Fortran is unavailable. A
+compiler can also be selected explicitly:
 
-The two-dimensional decomposition supports arbitrary lattice dimensions. If a
-dimension is not divisible by its process-grid dimension, the first blocks get
-one extra cell, and global output coordinates are reconstructed from explicit
-block offsets.
+```bash
+FC=gfortran bash test.sh
+FC=ifx bash test.sh
+```
 
-## Local runs
+Validate result files from a completed physical run:
 
-For a resource-conscious 300 x 300 moving-lid run, use the supplied local
-driver. It uses four coarray images, lowers the process priority, defaults to
-`Re=100`, creates a fresh output directory, and generates the streamplot after
-the solver finishes:
+```bash
+python3 test/validate_outputs.py --data-dir runs/my_run/shear
+```
+
+## Run locally
+
+The common interface is:
+
+```text
+bash run_local.sh CASE [OMEGA] [WALL_VELOCITY] [MAX_STEPS]
+```
+
+For example:
+
+```bash
+bash run_local.sh shear
+bash run_local.sh density 1.2
+bash run_local.sh couette 1.0 0.05
+bash run_local.sh poiseuille 1.0
+bash run_local.sh lid 1.0 0.0555555555555556
+```
+
+The scripts create a time-stamped directory below `runs/`. Set environment
+variables to change the build or output:
+
+```bash
+NX=300 NY=300 IMAGES=4 FC=ifx RUN_DIR=runs/lid_300 \
+  bash run_local.sh lid 1.0 0.0555555555555556
+```
+
+Supported settings are:
+
+- `NX`, `NY`: lattice dimensions, default `128 x 128`;
+- `IMAGES`: coarray images, default `1`;
+- `FC`: `ifx`, `caf`, or `gfortran`, detected automatically;
+- `BUILD_TYPE`: `release` or `debug`;
+- `RUN_DIR`: destination for the executable, log, and result files.
+
+Plain GNU Fortran uses `-fcoarray=single` and therefore supports one image.
+Use Intel Fortran or OpenCoarrays for `IMAGES` greater than one.
+
+To run every case with the same build, use `all`. Supplying `MAX_STEPS` makes
+each case run exactly that many steps:
+
+```bash
+NX=64 NY=64 bash run_local.sh all 1.0 0.02 100
+```
+
+Omit `MAX_STEPS` for a physical run with normal diagnostics and convergence
+checks. To cap such a run without disabling those checks, set
+`LBM_STEP_LIMIT`:
+
+```bash
+LBM_STEP_LIMIT=100000 bash run_local.sh lid 1.0 0.05
+```
+
+Convenience drivers are also provided:
 
 ```bash
 bash run_local_lid.sh
-```
-
-The defaults can be changed without editing the script, for example
-`IMAGES=2 OMEGA=1.0 WALL_VELOCITY=0.0555556 bash run_local_lid.sh`.
-
-Run the standard 300 x 300 lid-cavity Reynolds-number sweep with:
-
-```bash
+bash run_local_poiseuille.sh
+bash run_local_shear_sweep.sh
 bash run_lid_reynolds_sweep.sh
 ```
 
-It uses `Re = 100 500 1000 2500 5000`, a lid speed of 0.1, and a
-convergence-aware limit of 1,600,000 steps by default. Override the cap with,
-for example, `STEP_LIMIT=500000 bash run_lid_reynolds_sweep.sh`.
+## Measure local performance
 
-The force-driven Poiseuille case has a separate resource-conscious local
-driver. It defaults to a 64 x 64 grid and runs the solver, plot generation,
-and output validation in one command:
+The fourth argument enables fixed-step timing. `PERFORMANCE_ONLY=1` also
+removes field and diagnostic file output from the compiled executable:
 
 ```bash
-bash run_local_poiseuille.sh
+NX=512 NY=512 IMAGES=4 FC=ifx PERFORMANCE_ONLY=1 \
+  bash run_local.sh lid 1.0 0.05 5000
 ```
 
-Its grid and runtime parameters can also be overridden, for example
-`NX=128 NY=128 IMAGES=4 OMEGA=1.0 bash run_local_poiseuille.sh`.
+Each run writes `performance.csv` with the lattice size, image decomposition,
+steps, wall time, and MLUPS.
 
-With Intel oneAPI initialized, a four-image run is for example:
+## Run on a Slurm cluster
+
+`bwunicluster.slurm` builds inside the allocation and supports the same five
+case names. Request one Slurm task per coarray image:
 
 ```bash
-FOR_COARRAY_NUM_IMAGES=4 fpm run --compiler ifx \
-  --flag '-coarray=shared -O3' -- shear 1.4
-```
-
-Run the shear case at several omega values to generate the measured-viscosity
-points. Each run creates a separate `viscosity_omega_*.txt` file.
-
-Generate every available report figure with the existing Conda environment:
-
-```bash
-mkdir -p /tmp/matplotlib
-MPLCONFIGDIR=/tmp/matplotlib conda run -n meep \
-  python plots.py --output-dir figures
-```
-
-The plotting script skips cases that have not yet been run. It generates:
-
-- density and velocity evolution for both wave experiments;
-- shear-wave amplitude decay and measured viscosity versus omega;
-- transient Couette and Poiseuille profiles, analytical steady profiles, and
-  the half-way wall positions; and
-- streamplots at selected times for the moving-lid cavity.
-
-For pressure/body-force-driven plane Poiseuille flow, the steady analytical
-solution used in the output and plots is
-
-```text
-u_x(y) = g_x y (L-y) / (2 nu),   0 <= y <= L,
-```
-
-where `g_x` is the imposed acceleration, `L = NY`, and the lattice nodes are at
-`y = j - 1/2`. Thus the physical walls are at `y=0` and `y=L`.
-
-## Cluster runs
-
-`bwunicluster.slurm` fixes the lid case at 300 x 300 and accepts `OMEGA` and
-`WALL_VELOCITY` through `sbatch --export`, so the Reynolds number changes
-without changing the box. Other cases also accept `NX` and `NY`. The script has
-a viscosity sweep mode:
-
-```bash
-sbatch --export=ALL,CASE=viscosity-sweep,OMEGAS="0.6 0.8 1.0 1.2 1.4 1.6 1.7" \
+sbatch --nodes=1 --ntasks=16 \
+  --export=ALL,CASE=shear,NX=512,NY=512,NIMAGES=16 \
   bwunicluster.slurm
 ```
 
-It can run any individual case (`shear`, `density`, `couette`, `poiseuille`, or
-`lid`). Set `STEPS` to request a fixed-step timed run.
-
-For a fixed-image placement study, the supplied sweep keeps 512 coarray images
-and a 10000x10000 lattice fixed while comparing 16, 32, and 64 nodes:
+Run all cases in one allocation:
 
 ```bash
-DRY_RUN=1 bash submit_lid_scaling2.sh
-bash submit_lid_scaling2.sh
+sbatch --nodes=1 --ntasks=16 \
+  --export=ALL,CASE=all,NX=256,NY=256,NIMAGES=16,STEPS=1000 \
+  bwunicluster.slurm
 ```
 
-This corresponds to 32, 16, and 8 images per node. Three repetitions are
-submitted for every placement. To use the smaller communication-sensitive
-lattice instead, set `SIZES=5000x5000`. Each job writes `performance.csv`,
-`allocation.csv`, and a combined `placement.csv` to a unique directory under
-`cluster_runs/`. Full-field text output is disabled in these performance jobs
-because it is prohibitively large at these lattice sizes.
-
-After the jobs finish, compare node placements using the median of the repeats:
+The job defaults to Intel distributed coarrays. It also accepts `FC=caf` for
+OpenCoarrays and `FC=gfortran` for a one-task job. Cluster software names
+differ, so export the modules or setup script required at the target site
+before submission. For example:
 
 ```bash
-MPLCONFIGDIR=/tmp/matplotlib conda run -n meep \
-  python placement_plots.py --data-dir cluster_runs
+export MODULES="compiler/intel mpi/impi"
+export FC=ifx
+sbatch --export=ALL --nodes=2 --ntasks=64 bwunicluster.slurm
 ```
 
-For the conventional strong-scaling results already present under
-`cluster_runs/`, combine measurements into the image-count performance figures
-with:
+Alternatively, set `ENV_SETUP` to a shell setup file. Other useful overrides
+are `COARRAY_MODE`, `OMEGA`, `WALL_VELOCITY`, `STEPS`, `RUN_DIR`, and
+`PERFORMANCE_ONLY`.
+
+## Measure cluster performance
+
+Submit one output-free fixed-step measurement:
 
 ```bash
-mkdir -p /tmp/matplotlib
-MPLCONFIGDIR=/tmp/matplotlib conda run -n meep \
-  python performance_plots.py --data-dir cluster_runs
+sbatch --nodes=4 --ntasks=128 --ntasks-per-node=32 \
+  --export=ALL,CASE=lid,NIMAGES=128,NODES=4,TASKS_PER_NODE=32,NX=1200,NY=1200,STEPS=5000 \
+  lid_performance2.slurm
 ```
 
-This produces runtime, MLUPS, speedup, and parallel-efficiency plots, a combined
-four-panel dashboard, and `performance_summary.csv` under
-`cluster_runs/performance_figures/`. Repeated measurements at the same lattice
-size and image count are combined using their median by default.
-
-## Tests
-
-`fpm test` checks the D2Q9 quadrature weights, isotropic moments, opposite
-directions, and the default omega range. The simulation output itself is
-validated by comparison with shear-wave decay and the analytical Couette and
-Poiseuille profiles, as well as mass conservation and lid initial conditions:
+Submit repeated placement studies with the helper script:
 
 ```bash
-conda run -n meep python test/validate_outputs.py --data-dir .
+DRY_RUN=1 CASE=lid IMAGES=512 NODE_COUNTS="16 32 64" \
+  SIZES="5000x5000 10000x10000" bash submit_lid_scaling2.sh
+
+CASE=lid IMAGES=512 NODE_COUNTS="16 32 64" \
+  SIZES="5000x5000 10000x10000" bash submit_lid_scaling2.sh
+```
+
+The performance jobs write unique directories below `cluster_runs/` containing
+`performance.csv`, `allocation.csv`, `placement.csv`, and `simulation.log`.
+
+Create performance plots after the jobs finish:
+
+```bash
+python3 performance_plots.py --data-dir cluster_runs
+python3 placement_plots.py --data-dir cluster_runs
+```
+
+Create figures for any available physical-case outputs:
+
+```bash
+python3 plots.py --data-dir runs/my_run --output-dir runs/my_run/figures
 ```

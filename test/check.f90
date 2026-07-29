@@ -4,8 +4,7 @@ program check
   integer :: direction
   real(dp), parameter :: tolerance = 100.0_dp*epsilon(1.0_dp)
 
-  ! Verify the quadrature identities required for the D2Q9 equilibrium to recover
-  ! isotropic mass, momentum, and pressure moments.
+  ! Check the D2Q9 quadrature and opposite-direction identities.
   call assert_close(sum(w),1.0_dp,"D2Q9 weights sum to one")
   call assert_close(sum(w*real(cx,dp)),0.0_dp,"zero x momentum")
   call assert_close(sum(w*real(cy,dp)),0.0_dp,"zero y momentum")
@@ -13,7 +12,6 @@ program check
   call assert_close(sum(w*real(cy*cy,dp)),cs2,"y second moment")
   call assert_close(sum(w*real(cx*cy,dp)),0.0_dp,"mixed second moment")
 
-  ! Bounce-back relies on opp being an involution with exactly reversed velocity.
   do direction = 1, q
     if (opp(opp(direction)) /= direction .or. &
         cx(opp(direction)) /= -cx(direction) .or. &
@@ -32,6 +30,7 @@ contains
   subroutine assert_close(actual,expected,label)
     real(dp), intent(in) :: actual, expected
     character(len=*), intent(in) :: label
+    ! Fail when two scalar values differ beyond the test tolerance.
     if (abs(actual-expected) > tolerance) then
       print '(a,2(1x,es24.16))', trim(label)//" failed:",actual,expected
       error stop 1

@@ -194,7 +194,6 @@ def plot_performance(files: list[Path], output_file: Path) -> None:
     for nx_value, ny_value in sorted({(row[0], row[1]) for row in records}):
         subset = [row for row in records if row[:2] == (nx_value, ny_value)]
         images = sorted({row[2] for row in subset})
-        # Average repeated measurements at the same process count.
         mlups = [np.mean([row[3] for row in subset if row[2] == count])
                  for count in images]
         ax.plot(images, mlups, "o-", label=f"{nx_value}×{ny_value}")
@@ -255,6 +254,7 @@ def generate_available_figures(data_dir: Path, output_dir: Path) -> list[Path]:
 
 
 def main() -> None:
+    """Parse arguments and generate every available figure."""
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=ROOT)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "figures")

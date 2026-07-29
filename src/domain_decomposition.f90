@@ -2,30 +2,19 @@ module domain_decomposition
   use lbm_params
   implicit none
 
-  ! This module decomposes the global nx-by-ny lattice over a two-dimensional
-  ! grid of Fortran coarray images.  Image coordinates are one-based, as are
-  ! physical local-cell indices.  The local storage convention is:
-  !
-  !     0        : lower/left ghost layer
-  !     1:n*_loc : physical cells owned by this image
-  !     n*_loc+1 : upper/right ghost layer
-  !
-  ! nx_alloc/ny_alloc are the largest local block sizes on any image.  Coarrays
-  ! must have identical cobounds and array bounds on all images, so smaller
-  ! blocks allocate the same extent but leave their extra interior slots unused.
+  ! Decompose the global lattice over a two-dimensional coarray image grid.
 
   integer :: nimgs
   integer :: my_img
 
-  integer :: px, py          ! Number of image blocks in global x and y.
-  integer :: ix_img, iy_img  ! Coordinates of this image in that image grid.
+  integer :: px, py
+  integer :: ix_img, iy_img
 
-  integer :: nx_loc, ny_loc     ! Owned physical cells; ghosts are excluded.
-  integer :: nx_alloc, ny_alloc ! Common maximum block sizes for allocation.
-  integer :: x_offset, y_offset ! Zero-based global origin of this block.
+  integer :: nx_loc, ny_loc
+  integer :: nx_alloc, ny_alloc
+  integer :: x_offset, y_offset
 
-  ! A neighbour id of zero is a sentinel for a physical domain edge.  A
-  ! periodic global edge instead points to the image on the opposite side.
+  ! A zero neighbour identifies a physical boundary.
   integer :: left_img, right_img
   integer :: down_img, up_img
 
@@ -34,20 +23,15 @@ contains
   subroutine setup_images()
     implicit none
 
-    ! Coarray images are numbered 1..num_images().  choose_image_grid factors
-    ! that one-dimensional set into a px-by-py Cartesian topology.
+    ! Build local extents, offsets, and neighbours for this image.
     nimgs  = num_images()
     my_img = this_image()
 
     call choose_image_grid(nimgs, px, py)
 
-    ! Row-major mapping: x changes fastest in the coarray image number.
-    ! image_id below implements the inverse transformation.
     ix_img = mod(my_img - 1, px) + 1
     iy_img = (my_img - 1) / px + 1
 
-    ! If nx or ny is not divisible by the number of blocks, the first remainder
-    ! blocks receive one extra cell.  Offsets account for those larger blocks.
     nx_loc = block_size(nx, px, ix_img)
     ny_loc = block_size(ny, py, iy_img)
     nx_alloc = (nx + px - 1) / px
@@ -57,9 +41,6 @@ contains
 
 
 
-   ! Build the horizontal neighbour map.  At a periodic global edge, wrap to
-   ! the last/first image in the same image row.  At a wall, use zero so halo
-   ! exchange will leave that ghost layer untouched for boundary reconstruction.
    if (ix_img == 1) then
       if (bc_left == BC_PERIODIC) then
          left_img = image_id(px, iy_img)
@@ -82,8 +63,6 @@ contains
    end if
 
 
-   ! Build the corresponding vertical neighbour map.  Internal block edges
-   ! always have a real neighbour regardless of the physical boundary types.
    if (iy_img == 1) then
       if (bc_bottom == BC_PERIODIC) then
          down_img = image_id(ix_img, py)
@@ -105,8 +84,6 @@ contains
       up_img = image_id(ix_img, iy_img + 1)
    end if
 
-    ! All images must finish publishing the same decomposition state before
-    ! the simulation allocates coarrays and starts remote accesses.
     sync all
 
     if (my_img == 1) then
@@ -127,9 +104,7 @@ contains
     integer :: p, candidate_py
     real :: score, best_score
 
-    ! Consider every factorisation n = px*py that gives every image at least
-    ! one lattice cell.  A nearly square local block has a smaller perimeter,
-    ! which generally reduces the amount of halo data relative to useful work.
+    ! Choose the factorization that produces the most square local blocks.
     px_out = 0
     py_out = 0
     best_score = huge(1.0)
@@ -137,7 +112,6 @@ contains
        if (mod(n, p) /= 0) cycle
        candidate_py = n/p
        if (p > nx .or. candidate_py > ny) cycle
-       ! Prefer nearly square local domains, reducing halo surface area.
        score = abs(real(nx)/real(p) - real(ny)/real(candidate_py))
        if (score < best_score) then
           best_score = score
@@ -157,8 +131,7 @@ contains
   integer function block_size(global_size, parts, coordinate)
     integer, intent(in) :: global_size, parts, coordinate
 
-    ! Quotient/remainder partitioning keeps block sizes within one cell of one
-    ! another.  The lower-coordinate blocks own the remainder cells.
+    ! Return one block size from a quotient/remainder partition.
     block_size = global_size/parts
     if (coordinate <= mod(global_size,parts)) block_size = block_size + 1
   end function block_size
@@ -167,8 +140,7 @@ contains
   integer function block_offset(global_size, parts, coordinate)
     integer, intent(in) :: global_size, parts, coordinate
 
-    ! Number of cells owned by all lower-coordinate blocks: their base-size
-    ! cells plus one extra cell for each preceding remainder block.
+    ! Return the zero-based global offset of one block.
     block_offset = (coordinate-1)*(global_size/parts) + &
       min(coordinate-1,mod(global_size,parts))
   end function block_offset
@@ -177,8 +149,7 @@ contains
   integer function image_id(ix, iy)
     integer, intent(in) :: ix, iy
 
-    ! Convert Cartesian image coordinates back to a coarray image number.
-    ! Coordinates outside the image grid return the physical-boundary sentinel.
+    ! Convert image-grid coordinates to a coarray image number.
     if (ix < 1 .or. ix > px .or. iy < 1 .or. iy > py) then
        image_id = 0
     else
@@ -195,29 +166,15 @@ contains
 
   real(dp), intent(inout) :: f(q, 0:nx_alloc+1, 0:ny_alloc+1)[*]
   integer :: remote_nx, remote_ny
+  integer :: neighbour_images(4), neighbour_count
 
-  ! f is a coarray: each image can read another image's local f by appending a
-  ! coindex, for example f(...)[left_img].  Only f needs to be coarray storage;
-  ! macroscopic fields and the next-time-step buffer are strictly local.
-  !
-  ! The solver uses pull streaming:
-  !   f_next(q,i,j) = f(q,i-cx(q),j-cy(q)).
-  ! Therefore every physical cell can be streamed locally once the one-cell
-  ! halo holds the neighbouring post-collision populations.  One layer is
-  ! sufficient because every D2Q9 velocity component is -1, 0, or +1.
-  !
-  ! The initial barrier ensures every image has completed collision before any
-  ! image reads a neighbour's post-collision boundary.  This is deliberately a
-  ! simple, correctness-first synchronization scheme.
-  sync all
-
-  ! Fill the left and right ghost columns from the adjacent images' physical
-  ! edge columns.  A zero neighbour means a solid physical edge; its ghost
-  ! values are not used as boundary data and are corrected after streaming.
+  ! Exchange post-collision edge cells for local pull streaming.
+  neighbour_count = 0
+  call add_neighbour(left_img,neighbour_images,neighbour_count)
+  call add_neighbour(right_img,neighbour_images,neighbour_count)
+  if (neighbour_count > 0) sync images(neighbour_images(:neighbour_count))
 
   if (left_img /= 0) then
-     ! The left neighbour may own a different number of x cells.  Its physical
-     ! right edge is remote_nx, not necessarily this image's nx_loc.
      remote_nx = block_size(nx,px,merge(px,ix_img-1,ix_img == 1))
      f(:, 0, 1:ny_loc) = f(:, remote_nx, 1:ny_loc)[left_img]
   end if
@@ -226,14 +183,12 @@ contains
      f(:, nx_loc+1, 1:ny_loc) = f(:, 1, 1:ny_loc)[right_img]
   end if
 
-  ! Complete all horizontal reads before exchanging rows.  The row exchange
-  ! includes x=0 and x=nx_loc+1, so it also propagates the freshly received
-  ! horizontal ghost values into diagonal corner ghosts.  Those corners supply
-  ! diagonal D2Q9 populations when both x and y cross an image boundary.
-  sync all
-
-  ! Fill bottom and top ghost rows.  As above, the lower neighbour's physical
-  ! top row depends on that neighbour's actual (possibly uneven) block size.
+  neighbour_count = 0
+  call add_neighbour(left_img,neighbour_images,neighbour_count)
+  call add_neighbour(right_img,neighbour_images,neighbour_count)
+  call add_neighbour(down_img,neighbour_images,neighbour_count)
+  call add_neighbour(up_img,neighbour_images,neighbour_count)
+  if (neighbour_count > 0) sync images(neighbour_images(:neighbour_count))
 
   if (down_img /= 0) then
      remote_ny = block_size(ny,py,merge(py,iy_img-1,iy_img == 1))
@@ -244,10 +199,29 @@ contains
      f(:, 0:nx_loc+1, ny_loc+1) = f(:, 0:nx_loc+1, 1)[up_img]
   end if
 
-  ! No image may start overwriting f in the next collision step while another
-  ! image could still be reading it remotely for this exchange.
-  sync all
+  neighbour_count = 0
+  call add_neighbour(down_img,neighbour_images,neighbour_count)
+  call add_neighbour(up_img,neighbour_images,neighbour_count)
+  if (neighbour_count > 0) sync images(neighbour_images(:neighbour_count))
 
 end subroutine communicate_ghost_cells
+
+
+subroutine add_neighbour(image,images,count)
+  implicit none
+
+  integer, intent(in) :: image
+  integer, intent(inout) :: images(:)
+  integer, intent(inout) :: count
+
+  ! Add a unique remote image to a synchronization list.
+  if (image == 0 .or. image == my_img) return
+  if (count > 0) then
+     if (any(images(:count) == image)) return
+  end if
+
+  count = count + 1
+  images(count) = image
+end subroutine add_neighbour
 
 end module domain_decomposition

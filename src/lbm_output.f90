@@ -11,7 +11,7 @@ module lbm_output
   public :: write_flow_field, write_flow_snapshot
 
   integer, parameter :: CASE_COUETTE = 3
-  ! Cached physical parameters used to construct analytical reference solutions.
+  ! Physical parameters used by analytical reference solutions.
   real(dp) :: relaxation_omega, viscosity
 
 contains
@@ -19,6 +19,7 @@ contains
   subroutine configure_output(omega,nu)
     real(dp), intent(in) :: omega, nu
 
+    ! Store the physical parameters needed by output routines.
     relaxation_omega = omega
     viscosity = nu
   end subroutine configure_output
@@ -32,6 +33,7 @@ contains
     real(dp), parameter :: pi = acos(-1.0_dp)
     real(dp), parameter :: wave_number = 2.0_dp*pi/real(ny,dp)
 
+    ! Append measured and theoretical shear-wave amplitudes.
     call measure_shear_amplitude(f_s,amplitude)
 
     if (my_img == 1) then
@@ -57,9 +59,7 @@ contains
     real(dp) :: rho_cell, velocity, phase, projection
     real(dp), parameter :: pi = acos(-1.0_dp)
 
-    ! Project ux onto the initialized sine mode.  Every image accumulates its
-    ! owned cells using global coordinates; the reduction assembles the global
-    ! amplitude on image 1 without first gathering the complete field.
+    ! Measure the global shear-wave amplitude by sine-mode projection.
     projection = 0.0_dp
     do jj = 1, ny_loc
       global_y = y_offset + jj - 1
@@ -88,6 +88,7 @@ contains
     integer :: io_unit
     character(len=64) :: filename
 
+    ! Infer viscosity from shear decay and write one summary file.
     call measure_shear_amplitude(f_s,amplitude)
     if (my_img == 1) then
       wave_number = 2.0_dp*pi/real(ny,dp)
@@ -113,8 +114,7 @@ contains
     real(dp) :: rho_profile(ny), ux_profile(ny), uy_profile(ny)
     integer :: jj, global_y, io_unit
 
-    ! Each global y entry receives contributions only from images owning that
-    ! row.  co_sum combines the x-block partial sums into a global mean profile.
+    ! Append globally averaged shear-wave profiles.
     rho_profile = 0.0_dp
     ux_profile = 0.0_dp
     uy_profile = 0.0_dp
@@ -155,7 +155,7 @@ contains
     real(dp) :: rho_profile(nx), ux_profile(nx), uy_profile(nx)
     integer :: ii, global_x, io_unit
 
-    ! Assemble an x profile analogously, reducing partial sums over y blocks.
+    ! Append globally averaged density-wave profiles.
     rho_profile = 0.0_dp
     ux_profile = 0.0_dp
     uy_profile = 0.0_dp
@@ -192,8 +192,7 @@ contains
     real(dp), intent(out) :: profile(ny)
     integer :: jj, global_y
 
-    ! Compute the streamwise mean at each global y coordinate.  The arrays are
-    ! replicated temporaries, and only image 1 receives/normalizes the reduction.
+    ! Collect the global streamwise-velocity profile on image one.
     profile = 0.0_dp
     do jj = 1, ny_loc
       global_y = y_offset + jj
@@ -212,9 +211,7 @@ contains
     real(dp) :: profile(ny), y_position, theoretical
     integer :: jj, io_unit
 
-    ! Half-way bounce-back places the physical walls half a lattice spacing from
-    ! the first/last fluid-node centres.  Thus fluid nodes have y=j-1/2 while the
-    ! analytical wall locations written around them are y=0 and y=ny.
+    ! Append a channel profile and its steady analytical solution.
     call collect_x_profile(ux_c,profile)
     if (my_img == 1) then
       if (current_step == 0) then
@@ -257,6 +254,7 @@ contains
     real(dp) :: l2_numerator, l2_denominator, linf_error
     integer :: jj, io_unit
 
+    ! Write the final Couette profile and report its error.
     call collect_x_profile(ux_c,profile)
     if (my_img == 1) then
       l2_numerator = 0.0_dp
@@ -291,6 +289,7 @@ contains
     real(dp) :: l2_numerator, l2_denominator, linf_error
     integer :: jj, io_unit
 
+    ! Write the final Poiseuille profile and report its error.
     call collect_x_profile(ux_c,profile)
     if (my_img == 1) then
       l2_numerator = 0.0_dp
@@ -325,9 +324,7 @@ contains
     real(dp), allocatable :: global_rho(:,:), global_ux(:,:), global_uy(:,:)
     integer :: ii, jj, global_x, global_y, io_unit
 
-    ! Assemble a full field through reductions: each image writes its owned block
-    ! into otherwise-zero global work arrays, then co_sum overlays the disjoint
-    ! blocks on image 1.  Ghosts and allocation padding are never included.
+    ! Gather and write a global density and velocity field.
     allocate(global_rho(nx,ny),global_ux(nx,ny),global_uy(nx,ny))
     global_rho = 0.0_dp
     global_ux = 0.0_dp
@@ -370,6 +367,7 @@ contains
     integer, intent(in) :: current_step
     character(len=64) :: filename
 
+    ! Write a time-labelled moving-lid field snapshot.
     write(filename,'("moving_lid_frame_",i10.10,".txt")') current_step
     call write_flow_field(rho_c,ux_c,uy_c,trim(filename))
   end subroutine write_flow_snapshot

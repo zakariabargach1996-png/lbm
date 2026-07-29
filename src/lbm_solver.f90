@@ -9,8 +9,7 @@ module lbm_solver
   public :: initialize_equilibrium, macro_val, collide, stream
   public :: apply_boundaries, velocity_residual
 
-  ! Single-relaxation-time (BGK) collision frequency.  It is configured once
-  ! from the command line and controls the lattice viscosity.
+  ! BGK collision frequency configured at startup.
   real(dp) :: relaxation_omega
 
 contains
@@ -18,6 +17,7 @@ contains
   subroutine configure_solver(omega)
     real(dp), intent(in) :: omega
 
+    ! Store the relaxation parameter used by the collision operator.
     relaxation_omega = omega
   end subroutine configure_solver
   subroutine initialize_uniform(rho_i, ux_i, uy_i)
@@ -25,8 +25,7 @@ contains
     real(dp), intent(out) :: ux_i(0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(out) :: uy_i(0:nx_alloc+1,0:ny_alloc+1)
 
-    ! Initialize the complete allocation, including ghosts and unused padding,
-    ! to benign values.  Only 1:nx_loc,1:ny_loc represents owned fluid cells.
+    ! Initialize a stationary, unit-density fluid.
     rho_i = 1.0_dp
     ux_i = 0.0_dp
     uy_i = 0.0_dp
@@ -42,8 +41,7 @@ contains
     real(dp) :: phase
     real(dp), parameter :: pi = acos(-1.0_dp)
 
-    ! Use the global y coordinate so the sinusoid remains continuous across
-    ! image boundaries and is independent of the chosen decomposition.
+    ! Initialize a globally continuous sinusoidal shear velocity.
     call initialize_uniform(rho_i,ux_i,uy_i)
     do jj = 1, ny_loc
       global_y = y_offset + jj - 1
@@ -64,8 +62,7 @@ contains
     real(dp) :: phase_x
     real(dp), parameter :: pi = acos(-1.0_dp)
 
-    ! As with the shear wave, construct the perturbation in global rather than
-    ! local coordinates so every decomposition describes the same problem.
+    ! Initialize a globally continuous sinusoidal density perturbation.
     call initialize_uniform(rho_i,ux_i,uy_i)
     do jj = 1, ny_loc
       do ii = 1, nx_loc
@@ -85,9 +82,7 @@ contains
     integer :: ii, jj, qq
     real(dp) :: cu, u2
 
-    ! Populate each owned node with the second-order, low-Mach D2Q9 equilibrium.
-    ! Ghost layers are initially zero and are filled from neighbours before the
-    ! first streaming operation.
+    ! Convert macroscopic fields to equilibrium D2Q9 populations.
     f_i = 0.0_dp
     do jj = 1, ny_loc
       do ii = 1, nx_loc
@@ -111,10 +106,7 @@ contains
     integer :: ii, jj, qq
     real(dp) :: momentum_x, momentum_y
 
-    ! Recover density and velocity moments from the particle populations:
-    !   rho = sum_q f_q,  rho*u = sum_q f_q*c_q.
-    ! The half-force velocity correction is paired with the Guo forcing term in
-    ! collide, giving a time-centred body-force discretization.
+    ! Recover density and force-corrected velocity from the populations.
     rho_m = 0.0_dp
     ux_m = 0.0_dp
     uy_m = 0.0_dp
@@ -146,9 +138,7 @@ contains
     real(dp) :: feq, source, cu, u2, ci_dot_force
     real(dp) :: force_density_x, force_density_y
 
-    ! Collision is entirely local: relax each population toward equilibrium and
-    ! add the Guo source term for acceleration (gx,gy).  Communication occurs
-    ! only after all owned cells have been collided.
+    ! Apply BGK collision and the Guo body-force source term.
     do jj = 1, ny_loc
       do ii = 1, nx_loc
         u2 = ux_c(ii,jj)**2 + uy_c(ii,jj)**2
@@ -178,13 +168,7 @@ contains
     real(dp), intent(out) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     integer :: ii, jj, qq
 
-    ! Pull streaming asks where each population at (i,j) came from.  For cells
-    ! next to an image boundary, the source index is in the ghost layer already
-    ! filled by communicate_ghost_cells.  At a physical wall, those incoming
-    ! slots remain zero temporarily and apply_boundaries replaces them below.
-    !
-    ! Clearing all of f_next also keeps ghost/padding storage deterministic; only
-    ! the owned physical region is populated by this loop.
+    ! Pull post-collision populations from local cells or ghost layers.
     f_next = 0.0_dp
     do jj = 1, ny_loc
       do ii = 1, nx_loc
@@ -201,14 +185,7 @@ contains
     real(dp), intent(inout) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(in) :: u_wall
 
-    ! Boundary conditions are applied only by images touching a physical global
-    ! edge.  Internal interfaces and periodic global edges have nonzero neighbour
-    ! ids and were already handled by ghost exchange plus ordinary streaming.
-    !
-    ! f_post is the post-collision, pre-streaming state.  f_next is the streamed
-    ! state.  At a wall, pull streaming could not obtain populations entering the
-    ! domain, so the routines below reconstruct exactly those missing directions
-    ! from their outgoing opposites in f_post (half-way bounce-back).
+    ! Apply stationary or moving bounce-back at physical domain edges.
     if (left_img == 0 .and. bc_left == BC_WALL) then
       call apply_left_wall(f_post,f_next)
     end if
@@ -231,9 +208,7 @@ contains
     real(dp), intent(in) :: f_post(q,0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(inout) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     integer :: jj
-    ! At x=1, populations 2(E), 6(NE), and 9(SE) would enter from outside.
-    ! Reflect the outgoing W, SW, and NW populations respectively.  The wall is
-    ! located halfway between the boundary-node centre and the exterior node.
+    ! Reflect populations entering through the left wall.
     do jj = 1, ny_loc
       f_next(2,1,jj) = f_post(4,1,jj)
       f_next(6,1,jj) = f_post(8,1,jj)
@@ -246,8 +221,7 @@ contains
     real(dp), intent(in) :: f_post(q,0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(inout) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     integer :: jj
-    ! At x=nx_loc, reconstruct incoming W, NW, and SW populations by reflecting
-    ! the corresponding outgoing E, SE, and NE populations.
+    ! Reflect populations entering through the right wall.
     do jj = 1, ny_loc
       f_next(4,nx_loc,jj) = f_post(2,nx_loc,jj)
       f_next(7,nx_loc,jj) = f_post(9,nx_loc,jj)
@@ -260,8 +234,7 @@ contains
     real(dp), intent(in) :: f_post(q,0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(inout) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     integer :: ii
-    ! At y=1, reconstruct the incoming N, NE, and NW populations from the
-    ! outgoing S, SW, and SE populations.
+    ! Reflect populations entering through the bottom wall.
     do ii = 1, nx_loc
       f_next(3,ii,1) = f_post(5,ii,1)
       f_next(6,ii,1) = f_post(8,ii,1)
@@ -274,8 +247,7 @@ contains
     real(dp), intent(in) :: f_post(q,0:nx_alloc+1,0:ny_alloc+1)
     real(dp), intent(inout) :: f_next(q,0:nx_alloc+1,0:ny_alloc+1)
     integer :: ii
-    ! At y=ny_loc, reconstruct incoming S, SW, and SE from outgoing N, NE, and
-    ! NW populations.  This is no-slip half-way bounce-back for a fixed wall.
+    ! Reflect populations entering through a stationary top wall.
     do ii = 1, nx_loc
       f_next(5,ii,ny_loc) = f_post(3,ii,ny_loc)
       f_next(8,ii,ny_loc) = f_post(6,ii,ny_loc)
@@ -291,15 +263,7 @@ contains
     integer :: ii
     real(dp) :: rho_wall
 
-    ! Moving-wall bounce-back adds the tangential momentum of a wall travelling
-    ! at (+u_wall,0).  The normal population (S) is simply reflected; the two
-    ! diagonals receive equal and opposite corrections.  For D2Q9 with cs2=1/3,
-    ! the diagonal correction reduces to rho*u_wall/6.
-    !
-    ! rho_wall is estimated from the local post-collision populations.  At the
-    ! top corners, this routine runs after the left/right wall routines and thus
-    ! owns the final values of the two populations entering from the top.  This
-    ! is the chosen simple corner convention for the moving-lid case.
+    ! Reflect top-wall populations and add the lid's tangential momentum.
     do ii = 1, nx_loc
       rho_wall = sum(f_post(:,ii,ny_loc))
       f_next(5,ii,ny_loc) = f_post(3,ii,ny_loc)
@@ -317,9 +281,7 @@ contains
     real(dp), intent(out) :: value
     real(dp) :: numerator, denominator
 
-    ! Form a decomposition-independent global relative L2 change in velocity.
-    ! Each image contributes only owned cells; co_sum combines those partial
-    ! sums on every image before the common convergence decision is made.
+    ! Compute the global relative L2 velocity change and update the reference.
     numerator = sum((ux_c(1:nx_loc,1:ny_loc)- &
       ux_old(1:nx_loc,1:ny_loc))**2) + &
       sum((uy_c(1:nx_loc,1:ny_loc)-uy_old(1:nx_loc,1:ny_loc))**2)

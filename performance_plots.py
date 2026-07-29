@@ -172,7 +172,6 @@ def aggregate_measurements(
     elif statistic == "mean":
         reduce_values = np.mean
     else:
-        # "best" means the shortest time and, equivalently, greatest MLUPS.
         reduce_values = None
 
     summaries: list[Summary] = []
@@ -187,8 +186,6 @@ def aggregate_measurements(
             central_time = float(reduce_values(times))
             central_rate = float(reduce_values(rates))
 
-        # The decomposition should be deterministic.  Retaining the most recent
-        # px/py is sufficient for the table and highlights inconsistent input.
         decompositions = {(item.px, item.py) for item in items}
         if len(decompositions) > 1:
             print(
@@ -306,8 +303,6 @@ def draw_speedup(
         maximum_ratio = max(maximum_ratio, float(np.max(ratio)))
         axis.plot(images, speedup, "o-", label=series_label(key, show_steps))
 
-    # Normally every curve has a one-image baseline.  If incomplete data leave
-    # different baselines, draw a correct ideal reference for each one.
     all_images = sorted(
         {point.images for points in series.values() for point in points}
     )
@@ -475,8 +470,6 @@ def main() -> None:
     summaries = aggregate_measurements(measurements, args.statistic)
     series = organize_series(summaries)
     all_images = sorted({item.images for item in summaries})
-    # Include steps in the legend only if a lattice was benchmarked for more
-    # than one fixed step count.
     lattice_steps: dict[tuple[str, int, int], set[int]] = defaultdict(set)
     for item in summaries:
         lattice_steps[(item.case, item.nx, item.ny)].add(item.steps)

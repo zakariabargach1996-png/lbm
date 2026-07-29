@@ -7,6 +7,7 @@ module milestone4
   public :: say_hello
 contains
   subroutine say_hello
+    ! Print the library scaffold greeting.
     print *, "Hello, milestone4!"
   end subroutine say_hello
 end module milestone4

@@ -1,14 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# Keep the coarray image count fixed and vary only how densely those images are
-# placed on nodes.  On cpu_il, the established maximum is 32 images per node,
-# so 512 images can be compared on 16, 32, and 64 nodes.
+# Submit repeated fixed-image placement benchmarks for any solver case.
+CASE=${CASE:-lid}
 IMAGES=${IMAGES:-512}
 NODE_COUNTS=${NODE_COUNTS:-"16 32 64"}
 MAX_TASKS_PER_NODE=${MAX_TASKS_PER_NODE:-32}
-# 10000x10000 gives each image about 195,000 cells.  Override with
-# SIZES=5000x5000 for a shorter, more communication-sensitive experiment.
 SIZES=${SIZES:-"10000x10000"}
 STEPS=${STEPS:-5000}
 REPEATS=${REPEATS:-3}
@@ -19,6 +16,10 @@ EXCLUSIVE=${EXCLUSIVE:-1}
 DRY_RUN=${DRY_RUN:-0}
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
+if [[ ! "${CASE}" =~ ^(shear|density|couette|poiseuille|lid)$ ]]; then
+  echo "CASE must be shear, density, couette, poiseuille, or lid." >&2
+  exit 2
+fi
 for variable in IMAGES MAX_TASKS_PER_NODE REPEATS STEPS; do
   value=${!variable}
   if ! [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
@@ -71,8 +72,8 @@ for size in ${SIZES}; do
         --ntasks-per-node="${tasks_per_node}"
         --cpus-per-task=1
         --mem="${MEM_PER_NODE}"
-        --job-name="lid_${NX}x${NY}_i${IMAGES}_n${nodes}"
-        --export="ALL,NIMAGES=${IMAGES},NODES=${nodes},TASKS_PER_NODE=${tasks_per_node},NX=${NX},NY=${NY},STEPS=${STEPS},REPEAT=${repeat}"
+        --job-name="${CASE}_${NX}x${NY}_i${IMAGES}_n${nodes}"
+        --export="ALL,CASE=${CASE},NIMAGES=${IMAGES},NODES=${nodes},TASKS_PER_NODE=${tasks_per_node},NX=${NX},NY=${NY},STEPS=${STEPS},REPEAT=${repeat}"
       )
       if (( EXCLUSIVE )); then
         command+=(--exclusive)

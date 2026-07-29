@@ -7,10 +7,12 @@ import numpy as np
 
 
 def relative_l2(numerical: np.ndarray, analytical: np.ndarray) -> float:
+    """Return the relative L2 difference between two arrays."""
     return float(np.linalg.norm(numerical - analytical) / np.linalg.norm(analytical))
 
 
 def validate(data_dir: Path) -> list[str]:
+    """Validate every recognized solver output in a directory."""
     checks: list[str] = []
 
     shear_decay = data_dir / "shear_wave_decay.txt"
@@ -64,6 +66,7 @@ def validate(data_dir: Path) -> list[str]:
 
 
 def main() -> None:
+    """Parse arguments and print completed validation checks."""
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path.cwd())
     args = parser.parse_args()

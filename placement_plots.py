@@ -18,6 +18,7 @@ REQUIRED = {
 
 
 def read_rows(data_dir: Path) -> list[dict[str, str]]:
+    """Read placement measurements recursively from a directory."""
     rows: list[dict[str, str]] = []
     for path in sorted(data_dir.rglob("placement.csv")):
         with path.open(newline="", encoding="utf-8") as stream:
@@ -32,6 +33,7 @@ def read_rows(data_dir: Path) -> list[dict[str, str]]:
 
 
 def summarize(rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    """Combine repeated placement measurements by their median."""
     groups: dict[tuple[object, ...], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
         key = (
@@ -69,6 +71,7 @@ def summarize(rows: list[dict[str, str]]) -> list[dict[str, object]]:
 
 
 def write_summary(rows: list[dict[str, object]], path: Path) -> None:
+    """Write aggregated placement measurements as CSV."""
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
@@ -76,6 +79,7 @@ def write_summary(rows: list[dict[str, object]], path: Path) -> None:
 
 
 def draw(rows: list[dict[str, object]], path: Path) -> None:
+    """Plot throughput against nodes and tasks per node."""
     series: dict[tuple[object, ...], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         key = row["nx"], row["ny"], row["images"], row["steps"]
@@ -108,6 +112,7 @@ def draw(rows: list[dict[str, object]], path: Path) -> None:
 
 
 def main() -> None:
+    """Parse arguments and generate placement summaries."""
     parser = ArgumentParser()
     parser.add_argument("--data-dir", type=Path, default=Path("cluster_runs"))
     parser.add_argument(

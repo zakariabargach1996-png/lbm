@@ -98,8 +98,6 @@ def measured_viscosity_at_steps(
         raise ValueError("The decay histories have no common positive time steps")
 
     available = np.asarray(sorted(common_steps), dtype=int)
-    # Include the first sample to expose startup behavior, followed by points
-    # spread across the common observation window.
     fractions = np.asarray([0.0, 0.1, 0.25, 0.5, 0.75, 1.0])
     indices = np.unique(
         np.rint(fractions * (len(available) - 1)).astype(int)
@@ -115,8 +113,6 @@ def measured_viscosity_at_steps(
             for row in data
         }
         wave_number = 2.0 * np.pi / 300.0
-        # Infer NY from theory when possible so custom-grid reruns remain valid:
-        # theory/A0 = exp(-nu*k^2*t).
         positive = data[data[:, 0] > 0]
         applied_nu = applied[column]
         estimates = -np.log(
@@ -217,8 +213,6 @@ def plot_viscosity_time_history(
         ]
         step = positive[:, 0]
 
-        # Recover k² from the stored theoretical decay. This keeps the
-        # calculation correct for this 300x300 sweep and for other grid sizes.
         k2_samples = -np.log(
             np.abs(positive[:, 2] / INITIAL_AMPLITUDE)
         ) / (applied_nu * step)
@@ -311,6 +305,7 @@ def write_summary(values: np.ndarray, output_path: Path) -> None:
 
 
 def main() -> None:
+    """Parse arguments and create the shear-sweep reports."""
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)

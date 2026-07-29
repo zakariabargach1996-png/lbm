@@ -10,6 +10,7 @@ OUT = ROOT / "presentation" / "lbm_code_presentation.ipynb"
 
 
 def slide(source: str, kind: str = "markdown", slide_type: str = "slide"):
+    """Create one notebook cell with Reveal.js slide metadata."""
     cell = (
         nbf.v4.new_markdown_cell(source)
         if kind == "markdown"
@@ -237,8 +238,9 @@ Halo exchange proceeds in two stages:
 1. left/right columns;
 2. top/bottom rows **including the new column ghosts**, which propagates corners.
 
-The current correctness-first implementation uses three global `sync all` barriers
-per exchange.
+The exchange uses three dependency-matched `sync images` phases: horizontal
+neighbors before column reads, all cardinal neighbors before row reads, and
+vertical neighbors after row reads.
 """
     ),
     slide(
@@ -248,7 +250,7 @@ per exchange.
 Square brackets select storage exposed by another coarray image:
 
 ```fortran
-sync all
+sync images(horizontal_images)
 
 if (left_img /= 0) then
   f(:,0,1:ny_loc) = &
@@ -260,7 +262,7 @@ if (right_img /= 0) then
     f(:,1,1:ny_loc)[right_img]
 end if
 
-sync all
+sync images(cardinal_images)
 
 if (up_img /= 0) then
   f(:,0:nx_loc+1,ny_loc+1) = &
@@ -631,6 +633,31 @@ Highlights from the latest aggregate:
     ),
     slide(
         r"""
+## Local A/B test: halo synchronization
+
+The same 300×300 moving-lid benchmark was run locally for 5,000 steps with
+three repeats per image count. Values below are median MLUPS.
+
+| Images | Three `sync all` barriers | Neighbor-scoped `sync images` | Median change |
+|---:|---:|---:|---:|
+| 1 | 18.62 | 17.11 | −8.1% |
+| 2 | 32.79 | **38.49** | **+17.4%** |
+| 3 | 56.11 | **57.58** | +2.6% |
+| 4 | 72.27 | **73.64** | +1.9% |
+
+- The neighbor-scoped version synchronizes left/right, then all cardinal
+  neighbors, then up/down—matching the two-stage halo dependencies.
+- One image has no communication partner, so its difference is timing noise,
+  not a synchronization effect.
+- Repeat ranges overlap at 2 and 4 images; the result supports a modest local
+  improvement, but more randomized repeats are needed for a precise estimate.
+
+> The main value is removing unrelated images from each halo synchronization;
+> the benefit should be reassessed in the larger cluster scaling sweep.
+"""
+    ),
+    slide(
+        r"""
 ## Performance context: an optimized LBM framework
 
 | System | Peak shown here | Execution and workload |
@@ -665,7 +692,7 @@ Each lattice update moves two full population fields through memory:
 At scale, communication adds:
 
 - edge/corner halo traffic proportional to subdomain perimeter;
-- three global `sync all` barriers per exchange;
+- three neighbor-scoped synchronization phases per exchange;
 - remote coarray reads and synchronization latency.
 
 The implementation is therefore both **memory-bandwidth bound** locally and
@@ -685,7 +712,8 @@ The implementation is therefore both **memory-bandwidth bound** locally and
 
 ### Parallel scaling
 
-5. Replace global barriers with neighbor-scoped synchronization/events.
+5. Evaluate coarray events or asynchronous exchange beyond the current
+   neighbor-scoped synchronization.
 6. Pack/send only populations that actually cross each face, not all nine.
 7. Overlap interior collision/streaming with halo communication.
 8. Use shared-memory threading inside a node and fewer coarray images across nodes.
@@ -744,7 +772,7 @@ extra transforms, parameters, and tuning.
 - boundaries are limited to axis-aligned outer walls: there are no curved or internal
   solid geometries yet;
 - scaling points show substantial run variability and apparent superlinearity;
-- `sync all` is intentionally simple but eventually limits strong scaling.
+- neighbor-scoped synchronization still incurs latency at high image counts.
 """
     ),
     slide(
@@ -756,8 +784,8 @@ extra transforms, parameters, and tuning.
 3. A single solver reproduces decay, wave, channel, and cavity physics.
 4. Validation is strong for the analytical cases; the highest-Re lid result needs more runtime
    or a more robust collision model.
-5. The clearest next wins are removing the full-array copy, improving vectorization, and replacing
-   global synchronization with neighbor-aware communication.
+5. The clearest next wins are removing the full-array copy, improving vectorization, and overlapping
+   useful work with the neighbor-aware communication.
 
 ### Run the presentation
 

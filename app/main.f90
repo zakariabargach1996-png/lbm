@@ -5,8 +5,7 @@ program main
   use lbm_output
   implicit none
 
-  ! User-facing validation/flow cases.  The numeric values are also passed to
-  ! output routines that select the corresponding analytical reference profile.
+  ! Identifiers for the five supported simulation cases.
   integer, parameter :: CASE_SHEAR = 1
   integer, parameter :: CASE_DENSITY = 2
   integer, parameter :: CASE_COUETTE = 3
@@ -21,10 +20,7 @@ program main
   integer, parameter :: wave_output_every = 100
   integer, parameter :: density_output_every = 10
 
-  ! f is the only coarray field: each image exposes its populations so neighbours
-  ! can read edge cells into their ghost layers.  f_new and all macroscopic
-  ! fields are private to an image.  Every array is indexed with one ghost layer
-  ! on each side; owned cells are always 1:nx_loc by 1:ny_loc.
+  ! Store populations in a coarray and macroscopic fields in local arrays.
   real(dp), allocatable :: f(:,:,:)[:]
   real(dp), allocatable :: f_new(:,:,:)
   real(dp), allocatable :: rho(:,:), ux(:,:), uy(:,:)
@@ -37,8 +33,7 @@ program main
   real(dp) :: relaxation_omega, viscosity, wall_velocity
   logical :: converged, fixed_step_run
 
-  ! Boundary types must be configured before setup_images, because the latter
-  ! uses them to decide whether global-edge neighbours wrap or become walls.
+  ! Configure the case before constructing its image-neighbour map.
   call choose_case(case_id)
   call configure_runtime(relaxation_omega, wall_velocity)
   viscosity = cs2*(1.0_dp/relaxation_omega - 0.5_dp)
@@ -49,13 +44,9 @@ program main
   call calculate_run_control(case_id, nsteps, minimum_steps)
   call apply_step_controls(nsteps, minimum_steps, fixed_step_run)
   profile_output_interval = max(check_every,max(1,minimum_steps/4))
-  ! The steady solver often converges well before its conservative maximum.
-  ! Sampling every half diffusion time gives several useful lid snapshots.
   field_output_interval = max(check_every,max(1,minimum_steps/2))
 
-  ! Coarray bounds must agree on all images.  nx_alloc/ny_alloc are therefore
-  ! the maximum block dimensions; nx_loc/ny_loc delimit the part actually owned
-  ! by this image when an uneven decomposition leaves smaller edge blocks.
+  ! Allocate common coarray bounds with one ghost layer on every side.
   allocate(f(q,0:nx_alloc+1,0:ny_alloc+1)[*])
   allocate(f_new(q,0:nx_alloc+1,0:ny_alloc+1))
   allocate(rho(0:nx_alloc+1,0:ny_alloc+1))
@@ -64,7 +55,6 @@ program main
   allocate(ux_previous(0:nx_alloc+1,0:ny_alloc+1))
   allocate(uy_previous(0:nx_alloc+1,0:ny_alloc+1))
 
-#ifndef LBM_PERFORMANCE_ONLY
   select case (case_id)
   case (CASE_SHEAR)
     call initialize_shear_wave(rho, ux, uy, shear_u0)
@@ -79,8 +69,7 @@ program main
   ux_previous = ux
   uy_previous = uy
 
-  ! Seed halos before the first time step.  This is needed because the first
-  ! streaming operation may pull populations across an image/periodic boundary.
+  ! Populate halos before the first streaming operation.
   call communicate_ghost_cells(f)
 
   if (my_img == 1) then
@@ -92,6 +81,7 @@ program main
     end if
   end if
 
+#ifndef LBM_PERFORMANCE_ONLY
   select case (case_id)
   case (CASE_SHEAR)
     call write_shear_wave_decay(f, 0, shear_u0, "shear_wave_decay.txt")
@@ -116,16 +106,7 @@ program main
   sync all
   call system_clock(clock_start,clock_rate)
 
-  ! One lattice-Boltzmann time step:
-  !   1. recover rho and u from the current populations;
-  !   2. collide owned cells locally (and apply any body force);
-  !   3. exchange post-collision edge data into one-cell ghost layers;
-  !   4. pull-stream from local or ghost source cells;
-  !   5. reconstruct populations that enter through physical walls;
-  !   6. promote the completed buffer to the current state.
-  !
-  ! Exchanging after collision is essential: streaming must transport the
-  ! neighbour's new post-collision populations, not its previous-step values.
+  ! Advance the populations through collision, communication, and streaming.
   do step = 1, nsteps
     call macro_val(f, rho, ux, uy, force_x, force_y)
     call collide(f, rho, ux, uy, force_x, force_y)
@@ -185,8 +166,7 @@ program main
 
   sync all
   call system_clock(clock_stop)
-  ! The slowest image determines parallel wall time.  co_max sends that value to
-  ! image 1, where global throughput is reported in million lattice updates/s.
+  ! Report throughput using the slowest image's elapsed time.
   wall_seconds = real(clock_stop-clock_start,dp)/real(clock_rate,dp)
   call co_max(wall_seconds,result_image=1)
   if (my_img == 1) then
@@ -258,8 +238,7 @@ contains
     character(len=64) :: argument
     integer :: status
 
-    ! Prefer a command-line case name/number.  In interactive use, only image 1
-    ! reads stdin; co_broadcast gives every image the identical selection.
+    ! Read and broadcast the requested simulation case.
     selected = 0
     argument = ""
     call get_command_argument(1, argument, status=status)
@@ -304,8 +283,7 @@ contains
     character(len=64) :: argument
     integer :: io_status
 
-    ! Parse optional parameters on image 1 only, then broadcast them.  Keeping
-    ! command-line I/O on one image avoids inconsistent runtime configuration.
+    ! Read, validate, and broadcast the physical command-line parameters.
     omega_value = default_omega
     u_wall = 0.05_dp
 
@@ -340,6 +318,7 @@ contains
     character(len=*), intent(inout) :: text
     integer :: ii, code
 
+    ! Convert ASCII letters to lowercase for case-name matching.
     do ii = 1, len_trim(text)
       code = iachar(text(ii:ii))
       if (code >= iachar('A') .and. code <= iachar('Z')) then
@@ -355,8 +334,7 @@ contains
     character(len=64) :: argument
     integer :: requested_steps, step_limit, io_status, env_status
 
-    ! Supplying MAX_STEPS selects deterministic benchmark mode.  Diagnostics and
-    ! early convergence are disabled so timings cover exactly the requested work.
+    ! Apply fixed-step benchmark mode or a convergence-aware environment limit.
     requested_steps = 0
     is_fixed = .false.
     if (this_image() == 1) then
@@ -374,14 +352,11 @@ contains
     if (requested_steps > 0) then
       maximum_steps = requested_steps
       is_fixed = .true.
-      ! Fixed-step benchmarks suppress in-loop diagnostics and convergence.
       min_steps = requested_steps + 1
       if (this_image() == 1) print '(a)', &
         "Fixed-step timing mode: in-loop output and convergence checks disabled."
     end if
 
-    ! LBM_STEP_LIMIT is a safety cap for physical runs. Unlike the positional
-    ! MAX_STEPS benchmark argument, it preserves diagnostics and early stopping.
     step_limit = 0
     if (this_image() == 1 .and. .not. is_fixed) then
       argument = ""
@@ -414,6 +389,7 @@ contains
     logical :: exists
     character(len=16) :: case_name
 
+    ! Print performance and append one measurement to performance.csv.
     select case (selected)
     case (CASE_SHEAR);      case_name = "shear"
     case (CASE_DENSITY);    case_name = "density"
@@ -442,10 +418,7 @@ contains
     integer, intent(in) :: selected
     real(dp), intent(out) :: gx, gy
 
-    ! These are physical global-edge conditions, not per-image conditions.
-    ! setup_images later translates them into neighbour ids for each block:
-    ! periodic edges wrap during halo exchange; walls receive neighbour id zero
-    ! and are reconstructed after streaming.
+    ! Select global boundaries and body force for the requested case.
     gx = 0.0_dp
     gy = 0.0_dp
 
@@ -465,7 +438,6 @@ contains
       bc_right = BC_PERIODIC
       bc_bottom = BC_WALL
       bc_top = BC_WALL
-      ! Plane Poiseuille flow has umax = gx*H^2/(8*nu).
       gx = 8.0_dp*viscosity*target_poiseuille_umax/real(ny,dp)**2
     case (CASE_LID)
       bc_left = BC_WALL
@@ -498,8 +470,7 @@ contains
     real(dp), parameter :: pi = acos(-1.0_dp)
     real(dp) :: slow_time, wave_number
 
-    ! Estimate the slowest viscous diffusion time.  Steady cases must run for at
-    ! least one such time before the residual is allowed to stop the simulation.
+    ! Choose case-specific maximum and minimum run lengths.
     slow_time = real(max(nx,ny),dp)**2/(pi*pi*viscosity)
     wave_number = 2.0_dp*pi/real(ny,dp)
     min_steps = 0
@@ -508,7 +479,6 @@ contains
     case (CASE_SHEAR)
       maximum_steps = ceiling(-log(0.2_dp)/(viscosity*wave_number**2))
     case (CASE_DENSITY)
-      ! Five acoustic periods provide enough frames for a useful animation.
       maximum_steps = ceiling(5.0_dp*real(nx,dp)/sqrt(cs2))
     case default
       min_steps = ceiling(slow_time)
