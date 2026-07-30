@@ -171,10 +171,10 @@ sbatch --nodes=4 --ntasks=128 --ntasks-per-node=32 \
 Submit repeated placement studies with the helper script:
 
 ```bash
-DRY_RUN=1 CASE=lid IMAGES=512 NODE_COUNTS="16 32 64" \
+DRY_RUN=1 CASE=lid IMAGES=384 NODE_COUNTS="16 24 48" \
   SIZES="5000x5000 10000x10000" bash submit_lid_scaling2.sh
 
-CASE=lid IMAGES=512 NODE_COUNTS="16 32 64" \
+CASE=lid IMAGES=384 NODE_COUNTS="16 24 48" \
   SIZES="5000x5000 10000x10000" bash submit_lid_scaling2.sh
 ```
 

@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Submit repeated fixed-image placement benchmarks for any solver case.
 CASE=${CASE:-lid}
-IMAGES=${IMAGES:-512}
-NODE_COUNTS=${NODE_COUNTS:-"16 32 64"}
+IMAGES=${IMAGES:-384}
+NODE_COUNTS=${NODE_COUNTS:-"16 24 48"}
 MAX_TASKS_PER_NODE=${MAX_TASKS_PER_NODE:-32}
 SIZES=${SIZES:-"10000x10000"}
 STEPS=${STEPS:-5000}

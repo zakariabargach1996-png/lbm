@@ -1,8 +1,11 @@
-# LBM Jupyter presentation
+# LBM Jupyter notebooks
 
-The presentation is available in two forms:
+Two complementary notebooks are available:
 
-- `lbm_code_presentation.ipynb`: executable Jupyter notebook with slideshow metadata;
+- `lbm_results_report.ipynb`: results-first executable report, with validation and
+  scaling evidence before a compact methods section;
+- `lbm_code_presentation.ipynb`: theory and implementation presentation with
+  slideshow metadata;
 - `lbm_code_presentation.slides.html`: exported Reveal.js browser presentation.
 
 Launch the notebook from the repository root:
@@ -14,6 +17,15 @@ conda run -n meep jupyter notebook presentation/lbm_code_presentation.ipynb
 In Jupyter, use the notebook normally as an executable report. To present it,
 open the exported HTML file in a browser and navigate with Space or the arrow
 keys.
+
+To rebuild and execute the results report:
+
+```bash
+conda run -n meep python presentation/build_lbm_report.py
+conda run -n meep jupyter nbconvert \
+  --to notebook --execute --inplace \
+  presentation/lbm_results_report.ipynb
+```
 
 To rebuild the notebook after editing `build_lbm_presentation.py`:
 
