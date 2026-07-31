@@ -4,6 +4,7 @@ Two complementary notebooks are available:
 
 - `lbm_results_report.ipynb`: results-first executable report, with validation and
   scaling evidence before a compact methods section;
+- `lbm_results_report.pdf`: print-ready version of the executed results report;
 - `lbm_code_presentation.ipynb`: theory and implementation presentation with
   slideshow metadata;
 - `lbm_code_presentation.slides.html`: exported Reveal.js browser presentation.
